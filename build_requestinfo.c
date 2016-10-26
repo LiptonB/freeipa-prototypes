@@ -34,7 +34,9 @@ astring_type(const char *attr, const char *p, ssize_t n)
 	return V_ASN1_PRINTABLESTRING;
 }
 
-X509_NAME *cm_parse_subject(char *cm_template_subject) {
+// Parses subjects using the same code certmonger uses
+X509_NAME *
+cm_parse_subject(char *cm_template_subject) {
   char *p, *q, *s;
   int i;
   X509_NAME *subject = NULL;
@@ -133,24 +135,29 @@ conf_to_req_info(BIO *nconf_bio, BIO *pubkey_bio, unsigned char **out)
   return len;
 }
 
-int main(int argc, char *argv[]) {
+int
+main(int argc, char *argv[]) {
   unsigned char *der;
   int len;
   unsigned int i;
-  BIO *nconf_bio, *pubkey_bio, *stdout_bio, *base64;
+  BIO *nconf_bio = NULL, *pubkey_bio = NULL, *stdout_bio = NULL, *base64 = NULL;
 
 	if (argc != 3) {
-    fprintf(stderr, 
-        "Usage: %s <SubjectPublicKeyInfo file> <openssl config file>\n", argv[0]);
+    fprintf(stderr,
+        "Usage: %s <SubjectPublicKeyInfo file> <openssl config file>\n",
+        argv[0]);
     exit(1);
   }
 
   ERR_load_crypto_strings();
 
   nconf_bio = BIO_new_file(argv[1], "r");
+  if (nconf_bio == NULL) goto err;
 
   base64 = BIO_new(BIO_f_base64());
+  if (base64 == NULL) goto err;
   pubkey_bio = BIO_new_file(argv[2], "r");
+  if (pubkey_bio == NULL) goto err;
   BIO_push(base64, pubkey_bio);
 
   len = conf_to_req_info(nconf_bio, base64, &der);
@@ -158,10 +165,11 @@ int main(int argc, char *argv[]) {
 
   BIO_pop(base64);
   stdout_bio = BIO_new_fp(stdout, BIO_NOCLOSE);
+  if (stdout_bio == NULL) goto err;
   BIO_push(base64, stdout_bio);
 
-  BIO_write(base64, der, len);
-  BIO_flush(base64);
+  if (len != BIO_write(base64, der, len)) goto err;
+  if (1 != BIO_flush(base64)) goto err;
 
   BIO_free_all(base64);
   BIO_free_all(nconf_bio);
