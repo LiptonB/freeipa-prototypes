@@ -6,9 +6,8 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
-X509_PUBKEY *read_key(BIO *bio) {
+EVP_PKEY *read_key(BIO *bio) {
   EVP_PKEY *key; 
-  X509_PUBKEY *x509_pubkey = NULL;
   unsigned long err;
 
   key = PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
@@ -21,11 +20,7 @@ X509_PUBKEY *read_key(BIO *bio) {
     return NULL;
   }
 
-  X509_PUBKEY_set(&x509_pubkey, key);
-
-  EVP_PKEY_free(key);
-
-  return x509_pubkey;
+  return key;
 }
 
 void write_base64(unsigned char *buf, int len) {
@@ -44,7 +39,7 @@ int main(int argc, char *argv[]) {
   unsigned char *buf, *out;
   int len;
   BIO *bio;
-  X509_PUBKEY *pubkey;
+  EVP_PKEY *pubkey;
 
   if (argc != 2) {
     fprintf(stderr, "Usage: %s <PEM file>\n", argv[0]);
@@ -58,20 +53,20 @@ int main(int argc, char *argv[]) {
   if (pubkey == NULL) goto err;
   if (1 != BIO_free(bio)) goto err;
 
-  len = i2d_X509_PUBKEY(pubkey, NULL);
+  len = i2d_PUBKEY(pubkey, NULL);
   if (len < 0) goto err;
 
   buf = OPENSSL_malloc(len);
   if (buf == NULL) goto err;
 
   out = buf;
-  len = i2d_X509_PUBKEY(pubkey, &buf);
+  len = i2d_PUBKEY(pubkey, &buf);
   if (len < 0) goto err;
 
   write_base64(out, len);
 
   OPENSSL_free(out);
-  X509_PUBKEY_free(pubkey);
+  EVP_PKEY_free(pubkey);
 
   return 0;
 
