@@ -1,18 +1,10 @@
 #include <ctype.h>
 #include <string.h>
 #include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
 
-#include <openssl/bio.h>
-#include <openssl/conf.h>
 #include <openssl/err.h>
-#include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
-
 
 static int
 astring_type(const char *attr, const char *p, ssize_t n)
@@ -34,7 +26,7 @@ astring_type(const char *attr, const char *p, ssize_t n)
 	return V_ASN1_PRINTABLESTRING;
 }
 
-// Parses subjects using the same code certmonger uses
+// Copied from certmonger code
 X509_NAME *
 cm_parse_subject(char *cm_template_subject) {
   char *p, *q, *s;
@@ -76,7 +68,7 @@ cm_parse_subject(char *cm_template_subject) {
 }
 
 int
-conf_to_req_info(BIO *nconf_bio, BIO *pubkey_bio, unsigned char **out)
+conf_to_req_info(BIO *nconf_bio, EVP_PKEY *pubkey, unsigned char **out)
 {
   int fd;
   CONF *reqdata;
@@ -89,7 +81,6 @@ conf_to_req_info(BIO *nconf_bio, BIO *pubkey_bio, unsigned char **out)
   long errorline = -1;
   int len;
   int i;
-  EVP_PKEY *pubkey;
 
   reqdata = NCONF_new(NULL);
   i = NCONF_load_bio(reqdata, nconf_bio, &errorline);
@@ -112,9 +103,7 @@ conf_to_req_info(BIO *nconf_bio, BIO *pubkey_bio, unsigned char **out)
   X509_REQ_set_subject_name(req, subject);
   X509_NAME_free(subject);
 
-  pubkey = d2i_PUBKEY_bio(pubkey_bio, NULL);
   X509_REQ_set_pubkey(req, pubkey);
-  EVP_PKEY_free(pubkey);
 
   X509V3_set_ctx(&ext_ctx, NULL, NULL, req, NULL, 0);
   X509V3_set_nconf(&ext_ctx, reqdata);
@@ -136,51 +125,22 @@ conf_to_req_info(BIO *nconf_bio, BIO *pubkey_bio, unsigned char **out)
 }
 
 int
-main(int argc, char *argv[]) {
-  unsigned char *der;
-  int len;
-  unsigned int i;
-  BIO *nconf_bio = NULL, *pubkey_bio = NULL, *stdout_bio = NULL, *base64 = NULL;
+write_to_stdout_b64(unsigned char *data, int len) {
+  BIO *stdout_bio = NULL, *base64 = NULL;
 
-	if (argc != 3) {
-    fprintf(stderr,
-        "Usage: %s <SubjectPublicKeyInfo file> <openssl config file>\n",
-        argv[0]);
-    exit(1);
-  }
-
-  ERR_load_crypto_strings();
-
-  nconf_bio = BIO_new_file(argv[1], "r");
-  if (nconf_bio == NULL) goto err;
-
-  base64 = BIO_new(BIO_f_base64());
-  if (base64 == NULL) goto err;
-  pubkey_bio = BIO_new_file(argv[2], "r");
-  if (pubkey_bio == NULL) goto err;
-  BIO_push(base64, pubkey_bio);
-
-  len = conf_to_req_info(nconf_bio, base64, &der);
-  if (len < 0) goto err;
-
-  BIO_pop(base64);
   stdout_bio = BIO_new_fp(stdout, BIO_NOCLOSE);
   if (stdout_bio == NULL) goto err;
+  base64 = BIO_new(BIO_f_base64());
+  if (base64 == NULL) goto err;
   BIO_push(base64, stdout_bio);
 
-  if (len != BIO_write(base64, der, len)) goto err;
+  if (len != BIO_write(base64, data, len)) goto err;
   if (1 != BIO_flush(base64)) goto err;
 
   BIO_free_all(base64);
-  BIO_free_all(nconf_bio);
-  BIO_free_all(pubkey_bio);
-  free(der);
-
-  ERR_free_strings();
 
   return 0;
 
 err:
-  ERR_print_errors_fp(stderr);
-  exit(1);
+  return -1;
 }
