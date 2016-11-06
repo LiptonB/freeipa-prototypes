@@ -8,28 +8,11 @@
 
 #include "build_requestinfo.h"
 
-EVP_PKEY *read_key(BIO *bio) {
-  EVP_PKEY *key; 
-  unsigned long err;
-
-  key = PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
-  if (key == NULL) {
-    BIO_seek(bio, 0);
-    key = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
-  }
-
-  if (key == NULL) {
-    return NULL;
-  }
-
-  return key;
-}
-
 int main(int argc, char *argv[]) {
   unsigned char *buf, *out;
   int len;
   BIO *bio;
-  EVP_PKEY *pubkey;
+  X509_REQ *req;
 
   if (argc != 2) {
     fprintf(stderr, "Usage: %s <PEM file>\n", argv[0]);
@@ -39,24 +22,24 @@ int main(int argc, char *argv[]) {
   bio = BIO_new_file(argv[1], "r");
 	if (bio == NULL) goto err;
 
-  pubkey = read_key(bio);
-  if (pubkey == NULL) goto err;
+  req = PEM_read_bio_X509_REQ(bio, NULL, NULL, NULL);
+  if (req == NULL) goto err;
   if (1 != BIO_free(bio)) goto err;
 
-  len = i2d_PUBKEY(pubkey, NULL);
+  len = i2d_X509_REQ_INFO(req->req_info, NULL);
   if (len < 0) goto err;
 
   buf = OPENSSL_malloc(len);
   if (buf == NULL) goto err;
 
   out = buf;
-  len = i2d_PUBKEY(pubkey, &buf);
+  len = i2d_X509_REQ_INFO(req->req_info, &buf);
   if (len < 0) goto err;
 
   write_to_stdout_b64(out, len);
 
   OPENSSL_free(out);
-  EVP_PKEY_free(pubkey);
+  X509_REQ_free(req);
 
   return 0;
 
