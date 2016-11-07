@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -6,6 +7,7 @@
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
+#include <openssl/x509.h>
 
 #include "build_requestinfo.h"
 
@@ -45,10 +47,40 @@ ipa_get_requestdata(char *principal, char *profile)
   return fd;
 }
 
+// TODO: fix memory management and error handling
 EVP_PKEY *
 parse_pkey_from_reqinfo(FILE *reqinfo_file) {
-  // TODO: implement
+  long length;
+  int ret;
+  unsigned char *buf;
+  const unsigned char *reqinfo_buf;
+  X509_REQ_INFO *req_info;
+  EVP_PKEY *pubkey;
 
+  if (fseek(reqinfo_file, 0, SEEK_END) == -1) goto err;
+  length = ftell(reqinfo_file);
+  if (length == -1 || fseek(reqinfo_file, 0, SEEK_SET) == -1) goto err;
+
+  buf = malloc(length+1);
+  if (buf == NULL) goto err;
+
+  fread(buf, length+1, 1, reqinfo_file);
+  
+  if (!feof(reqinfo_file)) {
+    fprintf(stderr, "More bytes to read than expected\n");
+    goto err;
+  }
+
+  reqinfo_buf = buf;
+  req_info = d2i_X509_REQ_INFO(NULL, &reqinfo_buf, length);
+  if (req_info == NULL) goto err;
+
+  pubkey = X509_PUBKEY_get(req_info->pubkey);
+  if (pubkey != NULL) {
+    return pubkey;
+  }
+
+err:
   return NULL;
 }
 
