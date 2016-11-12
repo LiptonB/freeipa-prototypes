@@ -30,8 +30,9 @@ ipa_get_requestdata(char *principal, char *profile)
       //TODO: handle error
       return -1;
     case 0:
-      if (execvp("ipa", ipa_command) == -1) {
+      if (execvp("/home/blipton/bin/ipa", ipa_command) == -1) {
         //TODO: handle error
+        perror("execvp");
         return -1;
       }
       break;
@@ -49,30 +50,30 @@ ipa_get_requestdata(char *principal, char *profile)
 
 // TODO: fix memory management and error handling
 EVP_PKEY *
-parse_pkey_from_reqinfo(FILE *reqinfo_file) {
-  long length;
+parse_pkey_from_reqinfo(BIO *reqinfo_bio) {
   int ret;
-  unsigned char *buf;
+  unsigned char *buf = NULL, *buf_remaining;
+  size_t buf_size = 2048, tot_size_read = 0, size_read;
   const unsigned char *reqinfo_buf;
   X509_REQ_INFO *req_info;
   EVP_PKEY *pubkey;
 
-  if (fseek(reqinfo_file, 0, SEEK_END) == -1) goto err;
-  length = ftell(reqinfo_file);
-  if (length == -1 || fseek(reqinfo_file, 0, SEEK_SET) == -1) goto err;
+  while (!BIO_eof(reqinfo_bio)) {
+    if (buf_size - tot_size_read < 4096) {
+      buf_size *= 2;
+      buf = realloc(buf, buf_size);
+      buf_remaining = buf + tot_size_read;
+      if (buf == NULL) goto err;
+    }
 
-  buf = malloc(length+1);
-  if (buf == NULL) goto err;
-
-  fread(buf, length+1, 1, reqinfo_file);
-  
-  if (!feof(reqinfo_file)) {
-    fprintf(stderr, "More bytes to read than expected\n");
-    goto err;
+    size_read = BIO_read(reqinfo_bio, buf_remaining, buf_size-tot_size_read);
+    tot_size_read += size_read;
+    buf_remaining = buf + tot_size_read;
   }
+  *buf_remaining = '\0';
 
   reqinfo_buf = buf;
-  req_info = d2i_X509_REQ_INFO(NULL, &reqinfo_buf, length);
+  req_info = d2i_X509_REQ_INFO(NULL, &reqinfo_buf, size_read);
   if (req_info == NULL) goto err;
 
   pubkey = X509_PUBKEY_get(req_info->pubkey);
@@ -96,7 +97,8 @@ int main(int argc, char *argv[]) {
   char *profile = getenv("CERTMONGER_CA_PROFILE");
   EVP_PKEY *pubkey;
   int config_fd;
-  BIO *config_bio;
+  FILE *config_file;
+  BIO *config_bio, *reqinfo_bio, *base64;
   unsigned char *encoded;
   int len;
   
@@ -110,18 +112,28 @@ int main(int argc, char *argv[]) {
   principal = strdup(principal);
   profile = strdup(profile);
 
-  pubkey = parse_pkey_from_reqinfo(stdin);
+  reqinfo_bio = BIO_new_fp(stdin, BIO_NOCLOSE);
+  base64 = BIO_new(BIO_f_base64());
+  BIO_push(base64, reqinfo_bio);
+
+  pubkey = parse_pkey_from_reqinfo(base64);
   config_fd = ipa_get_requestdata(principal, profile);
 
   //bio = BIO_new_fd(fd, BIO_CLOSE);
-  config_bio = BIO_new_fp(fdopen(config_fd, "r"), BIO_CLOSE);
+  config_file = fdopen(config_fd, "r");
+  config_bio = BIO_new_fp(config_file, BIO_CLOSE);
   if (config_bio == NULL) goto err;
 
   len = conf_to_req_info(config_bio, pubkey, &encoded);
 
+  write_to_stdout_b64(encoded, len);
+
   free(principal);
   free(profile);
   BIO_free(config_bio);
+  BIO_free_all(base64);
+
+  return 0;
 
 err:
   ERR_print_errors_fp(stderr);
