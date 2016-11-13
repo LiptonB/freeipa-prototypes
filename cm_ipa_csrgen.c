@@ -94,16 +94,18 @@ int main(int argc, char *argv[]) {
   //   For build_requestinfo:
   //   - DER-encoded CertificationRequestInfo (SubjectPublicKeyInfo comes from here) - stdin
 
-  char *principal = getenv("CERTMONGER_REQ_PRINCIPAL");
-  char *profile = getenv("CERTMONGER_CA_PROFILE");
+  char *principal = NULL;
+  char *profile = NULL;
   EVP_PKEY *pubkey;
   int config_fd;
   FILE *config_file;
-  BIO *config_bio, *reqinfo_bio, *base64;
+  BIO *config_bio = NULL, *reqinfo_bio = NULL, *base64 = NULL;
   unsigned char *encoded;
   int len;
   int retcode = 1;
   
+  principal = getenv("CERTMONGER_REQ_PRINCIPAL");
+  profile = getenv("CERTMONGER_CA_PROFILE");
   if (principal == NULL) {
     fprintf(stderr, "CERTMONGER_REQ_PRINCIPAL environment variable was not set\n");
     goto cleanup;
@@ -162,10 +164,18 @@ int main(int argc, char *argv[]) {
   retcode = 0;
 
 cleanup:
-  free(principal);
-  free(profile);
-  BIO_free(config_bio);
-  BIO_free_all(base64);
+  if (principal != NULL) {
+    free(principal);
+  }
+  if (profile != NULL) {
+    free(profile);
+  }
+  if (config_bio != NULL) {
+    BIO_free(config_bio);
+  }
+  if (base64 != NULL) {
+    BIO_free_all(base64);
+  }
 
   return retcode;
 }
