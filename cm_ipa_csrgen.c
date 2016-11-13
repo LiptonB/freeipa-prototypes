@@ -30,6 +30,7 @@ ipa_get_requestdata(char *principal, char *profile)
       //TODO: handle error
       return -1;
     case 0:
+      // TODO: Why does this need the full path?
       if (execvp("/home/blipton/bin/ipa", ipa_command) == -1) {
         //TODO: handle error
         perror("execvp");
@@ -101,41 +102,70 @@ int main(int argc, char *argv[]) {
   BIO *config_bio, *reqinfo_bio, *base64;
   unsigned char *encoded;
   int len;
+  int retcode = 1;
   
   if (principal == NULL) {
-    // TODO: raise
+    fprintf(stderr, "CERTMONGER_REQ_PRINCIPAL environment variable was not set\n");
+    goto cleanup;
   }
   if (profile == NULL) {
-    // TODO: raise
+    fprintf(stderr, "CERTMONGER_CA_PROFILE environment variable was not set\n");
+    goto cleanup;
   }
 
   principal = strdup(principal);
   profile = strdup(profile);
+  if (principal == NULL || profile == NULL) {
+    perror("main:strdup");
+    goto cleanup;
+  }
 
   reqinfo_bio = BIO_new_fp(stdin, BIO_NOCLOSE);
   base64 = BIO_new(BIO_f_base64());
+  if (reqinfo_bio == NULL || base64 == NULL) {
+    ERR_print_errors_fp(stderr);
+    goto cleanup;
+  }
   BIO_push(base64, reqinfo_bio);
 
   pubkey = parse_pkey_from_reqinfo(base64);
+  if (pubkey == NULL) {
+    fprintf(stderr, "Unable to parse public key\n");
+    goto cleanup;
+  }
   config_fd = ipa_get_requestdata(principal, profile);
+  if (config_fd == -1) {
+    fprintf(stderr, "Unable to generate config file\n");
+    goto cleanup;
+  }
 
-  //bio = BIO_new_fd(fd, BIO_CLOSE);
   config_file = fdopen(config_fd, "r");
+  if (config_file == NULL) {
+    perror("main:fdopen");
+    goto cleanup;
+  }
+
   config_bio = BIO_new_fp(config_file, BIO_CLOSE);
-  if (config_bio == NULL) goto err;
+  if (config_bio == NULL) {
+    ERR_print_errors_fp(stderr);
+    goto cleanup;
+  }
 
   len = conf_to_req_info(config_bio, pubkey, &encoded);
+  if (len == -1) {
+    fprintf(stderr, "Unable to generate CertificationRequestInfo from config\n");
+    goto cleanup;
+  }
 
   write_to_stdout_b64(encoded, len);
 
+  retcode = 0;
+
+cleanup:
   free(principal);
   free(profile);
   BIO_free(config_bio);
   BIO_free_all(base64);
 
-  return 0;
-
-err:
-  ERR_print_errors_fp(stderr);
-  exit(1);
+  return retcode;
 }
