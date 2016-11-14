@@ -73,53 +73,104 @@ conf_to_req_info(BIO *nconf_bio, EVP_PKEY *pubkey, unsigned char **out)
   int fd;
   CONF *reqdata;
   char *extn_section;
-  char *dn_str;
+  char *dn_str = NULL;
   X509V3_CTX ext_ctx;
-  X509_NAME *subject;
-  X509_REQ *req;
+  X509_NAME *subject = NULL;
+  X509_REQ *req = NULL;
   unsigned char *buf;
   long errorline = -1;
-  int len;
+  int len = -1;
   int i;
+
+  *out = NULL;
 
   reqdata = NCONF_new(NULL);
   i = NCONF_load_bio(reqdata, nconf_bio, &errorline);
   if (i <= 0) {
-    // TODO: handle error
-    // if (errorline <= 0)
-    //     BIO_printf(bio_err, "%s: Can't load config file \"%s\"\n",
-    //                 opt_getprog(), filename);
-    // else
-    //     BIO_printf(bio_err, "%s: Error on line %ld of config file \"%s\"\n",
-    //                 opt_getprog(), errorline, filename);
-    NCONF_free(reqdata);
-    return -1;
+    if (errorline <= 0) {
+      fprintf(stderr, "Can't load config file\n");
+    } else {
+      fprintf(stderr, "Error on line %ld of config file\n", errorline);
+    }
+    goto finish;
   }
 
   dn_str = NCONF_get_string(reqdata, "req", "cm_template_subject");
+  if (dn_str == NULL) {
+    // TODO: Could it just be missing from config?
+    ERR_print_errors_fp(stderr);
+    goto finish;
+  }
+  dn_str = strdup(dn_str);
+  if (dn_str == NULL) {
+    perror("main:strdup");
+    goto finish;
+  }
   subject = cm_parse_subject(dn_str);
 
   req = X509_REQ_new();
-  X509_REQ_set_subject_name(req, subject);
-  X509_NAME_free(subject);
-
-  X509_REQ_set_pubkey(req, pubkey);
+  if (req == NULL) {
+    ERR_print_errors_fp(stderr);
+    goto finish;
+  }
+  if (!X509_REQ_set_subject_name(req, subject)) {
+    ERR_print_errors_fp(stderr);
+    goto finish;
+  }
+  if (!X509_REQ_set_pubkey(req, pubkey)) {
+    ERR_print_errors_fp(stderr);
+    goto finish;
+  }
 
   X509V3_set_ctx(&ext_ctx, NULL, NULL, req, NULL, 0);
   X509V3_set_nconf(&ext_ctx, reqdata);
   extn_section = NCONF_get_string(reqdata, "req", "req_extensions");
-  X509V3_EXT_REQ_add_nconf(reqdata, &ext_ctx, extn_section, req);
+  if (extn_section == NULL) {
+    // TODO: Could it just be missing from config?
+  }
+  if (!X509V3_EXT_REQ_add_nconf(reqdata, &ext_ctx, extn_section, req)) {
+    ERR_print_errors_fp(stderr);
+    goto finish;
+  }
 
   len = i2d_X509_REQ_INFO(req->req_info, NULL);
-  buf = OPENSSL_malloc(len);
+  if (len < 0) {
+    len = -1;
+    ERR_print_errors_fp(stderr);
+    goto finish;
+  }
+  buf = malloc(len);
   if (buf == NULL) {
-    return -1;
+    perror("conf_to_req_info:malloc");
+    goto finish;
   }
   *out = buf;
-  i2d_X509_REQ_INFO(req->req_info, &buf);
+  len = i2d_X509_REQ_INFO(req->req_info, &buf);
+  if (len < 0) {
+    len = -1;
+    ERR_print_errors_fp(stderr);
+    goto finish;
+  }
 
-  NCONF_free(reqdata);
-  X509_REQ_free(req);
+finish:
+  if (reqdata != NULL) {
+    NCONF_free(reqdata);
+  }
+  if (req != NULL) {
+    X509_REQ_free(req);
+  }
+  if (subject != NULL) {
+    X509_NAME_free(subject);
+  }
+  if (dn_str != NULL) {
+    free(dn_str);
+  }
+  if (len == -1) {
+    if (*out != NULL) {
+      free(*out);
+      *out = NULL;
+    }
+  }
 
   return len;
 }

@@ -17,13 +17,13 @@ ipa_get_requestdata(char *principal, char *profile)
   char *ipa_command[] = {"ipa", "cert-get-requestdata", "--principal", principal,
     "--profile-id", profile, "--helper", "certmonger", "--out", NULL, NULL};
   char requestdata_file[] = "/tmp/cm.XXXXXX";
-  int fd = -1, status;
+  int fd = -1, status, ret = -1;
   pid_t pid;
 
   fd = mkstemp(requestdata_file);
   if (fd == -1) {
     perror("ipa_get_requestdata:mkstemp");
-    goto err;
+    goto finish;
   }
   ipa_command[9] = requestdata_file;
 
@@ -31,30 +31,34 @@ ipa_get_requestdata(char *principal, char *profile)
   switch (pid) {
     case -1:
       perror("ipa_get_requestdata:fork");
-      goto err;
+      goto finish;
     case 0:
       // TODO: Why does this need the full path?
       if (execvp("/home/blipton/bin/ipa", ipa_command) == -1) {
         perror("ipa_get_requestdata:execvp");
-        goto err;
+        goto finish;
       }
       break;
   }
   if (waitpid(pid, &status, 0) == -1) {
     perror("ipa_get_requestdata:waitpid");
-    goto err;
+    goto finish;
   }
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
     fprintf(stderr, "Error executing ipa command\n");
-    goto err;
+    goto finish;
   }
-  return fd;
 
-err:
-  if (fd != -1) {
-    close(fd);
+  ret = fd;
+
+finish:
+  if (ret == -1) {
+    if (fd != -1) {
+      close(fd);
+    }
   }
-  return -1;
+
+  return ret;
 }
 
 EVP_PKEY *
@@ -73,7 +77,7 @@ parse_pkey_from_reqinfo(BIO *reqinfo_bio) {
       buf_new = realloc(buf, buf_size);
       if (buf_new == NULL) {
         perror("parse_pkey_from_reqinfo:realloc");
-        goto err;
+        goto finish;
       }
       buf = buf_new;
       buf_remaining = buf + tot_size_read;
@@ -91,29 +95,29 @@ parse_pkey_from_reqinfo(BIO *reqinfo_bio) {
   req_info = d2i_X509_REQ_INFO(NULL, &reqinfo_buf, size_read);
   if (req_info == NULL){
     ERR_print_errors_fp(stderr);
-    goto err;
+    goto finish;
   }
 
   pubkey = X509_PUBKEY_get(req_info->pubkey);
   if (pubkey == NULL){
     ERR_print_errors_fp(stderr);
-    goto err;
+    goto finish;
+  }
+
+finish:
+  if (pubkey == NULL) {
+    if (buf != NULL) {
+      free(buf);
+    }
+    if (req_info != NULL) {
+      X509_REQ_INFO_free(req_info);
+    }
+    if (pubkey != NULL) {
+      EVP_PKEY_free(pubkey);
+    }
   }
 
   return pubkey;
-
-err:
-  if (buf != NULL) {
-    free(buf);
-  }
-  if (req_info != NULL) {
-    X509_REQ_INFO_free(req_info);
-  }
-  if (pubkey != NULL) {
-    EVP_PKEY_free(pubkey);
-  }
-
-  return NULL;
 }
 
 int
@@ -139,62 +143,62 @@ main(int argc, char *argv[]) {
   profile = getenv("CERTMONGER_CA_PROFILE");
   if (principal == NULL) {
     fprintf(stderr, "CERTMONGER_REQ_PRINCIPAL environment variable was not set\n");
-    goto cleanup;
+    goto finish;
   }
   if (profile == NULL) {
     fprintf(stderr, "CERTMONGER_CA_PROFILE environment variable was not set\n");
-    goto cleanup;
+    goto finish;
   }
 
   principal = strdup(principal);
   profile = strdup(profile);
   if (principal == NULL || profile == NULL) {
     perror("main:strdup");
-    goto cleanup;
+    goto finish;
   }
 
   reqinfo_bio = BIO_new_fp(stdin, BIO_NOCLOSE);
   base64 = BIO_new(BIO_f_base64());
   if (reqinfo_bio == NULL || base64 == NULL) {
     ERR_print_errors_fp(stderr);
-    goto cleanup;
+    goto finish;
   }
   BIO_push(base64, reqinfo_bio);
 
   pubkey = parse_pkey_from_reqinfo(base64);
   if (pubkey == NULL) {
     fprintf(stderr, "Unable to parse public key\n");
-    goto cleanup;
+    goto finish;
   }
   config_fd = ipa_get_requestdata(principal, profile);
   if (config_fd == -1) {
     fprintf(stderr, "Unable to generate config file\n");
-    goto cleanup;
+    goto finish;
   }
 
   config_file = fdopen(config_fd, "r");
   if (config_file == NULL) {
     perror("main:fdopen");
-    goto cleanup;
+    goto finish;
   }
 
   config_bio = BIO_new_fp(config_file, BIO_CLOSE);
   if (config_bio == NULL) {
     ERR_print_errors_fp(stderr);
-    goto cleanup;
+    goto finish;
   }
 
   len = conf_to_req_info(config_bio, pubkey, &encoded);
   if (len == -1) {
     fprintf(stderr, "Unable to generate CertificationRequestInfo from config\n");
-    goto cleanup;
+    goto finish;
   }
 
   write_to_stdout_b64(encoded, len);
 
   retcode = 0;
 
-cleanup:
+finish:
   if (principal != NULL) {
     free(principal);
   }
