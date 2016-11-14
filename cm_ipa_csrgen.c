@@ -17,36 +17,44 @@ ipa_get_requestdata(char *principal, char *profile)
   char *ipa_command[] = {"ipa", "cert-get-requestdata", "--principal", principal,
     "--profile-id", profile, "--helper", "certmonger", "--out", NULL, NULL};
   char requestdata_file[] = "/tmp/cm.XXXXXX";
-  int fd, status;
+  int fd = -1, status;
   pid_t pid;
 
-  // TODO: make sure principal and profile aren't NULL
   fd = mkstemp(requestdata_file);
+  if (fd == -1) {
+    perror("ipa_get_requestdata:mkstemp");
+    goto err;
+  }
   ipa_command[9] = requestdata_file;
 
   pid = fork();
   switch (pid) {
     case -1:
-      //TODO: handle error
-      return -1;
+      perror("ipa_get_requestdata:fork");
+      goto err;
     case 0:
       // TODO: Why does this need the full path?
       if (execvp("/home/blipton/bin/ipa", ipa_command) == -1) {
-        //TODO: handle error
-        perror("execvp");
-        return -1;
+        perror("ipa_get_requestdata:execvp");
+        goto err;
       }
       break;
   }
   if (waitpid(pid, &status, 0) == -1) {
-    //TODO: handle error
-    return -1;
+    perror("ipa_get_requestdata:waitpid");
+    goto err;
   }
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-    // TODO: handle error
-    return -1;
+    fprintf(stderr, "Error executing ipa command\n");
+    goto err;
   }
   return fd;
+
+err:
+  if (fd != -1) {
+    close(fd);
+  }
+  return -1;
 }
 
 EVP_PKEY *
