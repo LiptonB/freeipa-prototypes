@@ -49,44 +49,67 @@ ipa_get_requestdata(char *principal, char *profile)
   return fd;
 }
 
-// TODO: fix memory management and error handling
 EVP_PKEY *
 parse_pkey_from_reqinfo(BIO *reqinfo_bio) {
   int ret;
-  unsigned char *buf = NULL, *buf_remaining;
-  size_t buf_size = 2048, tot_size_read = 0, size_read;
+  unsigned char *buf = NULL, *buf_new = NULL, *buf_remaining;
+  size_t buf_size = 2048, tot_size_read = 0;
+  int size_read;
   const unsigned char *reqinfo_buf;
-  X509_REQ_INFO *req_info;
-  EVP_PKEY *pubkey;
+  X509_REQ_INFO *req_info = NULL;
+  EVP_PKEY *pubkey = NULL;
 
   while (!BIO_eof(reqinfo_bio)) {
     if (buf_size - tot_size_read < 4096) {
       buf_size *= 2;
-      buf = realloc(buf, buf_size);
+      buf_new = realloc(buf, buf_size);
+      if (buf_new == NULL) {
+        perror("parse_pkey_from_reqinfo:realloc");
+        goto err;
+      }
+      buf = buf_new;
       buf_remaining = buf + tot_size_read;
-      if (buf == NULL) goto err;
     }
 
     size_read = BIO_read(reqinfo_bio, buf_remaining, buf_size-tot_size_read);
-    tot_size_read += size_read;
-    buf_remaining = buf + tot_size_read;
+    if (size_read >= 0) {
+      tot_size_read += size_read;
+      buf_remaining = buf + tot_size_read;
+    }
   }
   *buf_remaining = '\0';
 
   reqinfo_buf = buf;
   req_info = d2i_X509_REQ_INFO(NULL, &reqinfo_buf, size_read);
-  if (req_info == NULL) goto err;
-
-  pubkey = X509_PUBKEY_get(req_info->pubkey);
-  if (pubkey != NULL) {
-    return pubkey;
+  if (req_info == NULL){
+    ERR_print_errors_fp(stderr);
+    goto err;
   }
 
+  pubkey = X509_PUBKEY_get(req_info->pubkey);
+  if (pubkey == NULL){
+    ERR_print_errors_fp(stderr);
+    goto err;
+  }
+
+  return pubkey;
+
 err:
+  if (buf != NULL) {
+    free(buf);
+  }
+  if (req_info != NULL) {
+    X509_REQ_INFO_free(req_info);
+  }
+  if (pubkey != NULL) {
+    EVP_PKEY_free(pubkey);
+  }
+
   return NULL;
 }
 
-int main(int argc, char *argv[]) {
+int
+main(int argc, char *argv[]) {
   // Inputs:
   //   For IPA:
   //   - principal - CERTMONGER_REQ_PRINCIPAL
