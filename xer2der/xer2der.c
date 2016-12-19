@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "asn1/SubjectAltName.h"
+#include "SubjectAltName.h"
 
 int main(int argc, char *argv[]) {
 	FILE *xerfile;
