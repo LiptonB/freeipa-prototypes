@@ -16,7 +16,7 @@ main(int argc, char *argv[]) {
 
 	if (argc != 3) {
     fprintf(stderr,
-        "Usage: %s <SubjectPublicKeyInfo file> <openssl config file>\n",
+        "Usage: %s <openssl config file> <SubjectPublicKeyInfo file>\n",
         argv[0]);
     exit(1);
   }
@@ -37,7 +37,7 @@ main(int argc, char *argv[]) {
   len = conf_to_req_info(nconf_bio, pubkey, &der);
   if (len < 0) goto err;
 
-  if (!write_to_stdout_b64(der, len)) goto err;
+  if (write_to_stdout_b64(der, len) == -1) goto err;
 
   EVP_PKEY_free(pubkey);
   BIO_free_all(base64);
