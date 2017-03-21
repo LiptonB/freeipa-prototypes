@@ -33,6 +33,7 @@ main(int argc, char *argv[]) {
   BIO_push(base64, pubkey_bio);
 
   pubkey = d2i_PUBKEY_bio(base64, NULL);
+  if (pubkey == NULL) goto err;
 
   len = conf_to_req_info(nconf_bio, pubkey, &der);
   if (len < 0) goto err;
