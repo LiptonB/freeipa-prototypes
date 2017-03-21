@@ -26,45 +26,48 @@ astring_type(const char *attr, const char *p, ssize_t n)
 	return V_ASN1_PRINTABLESTRING;
 }
 
-// Copied from certmonger code
-X509_NAME *
-cm_parse_subject(char *cm_template_subject) {
-  char *p, *q, *s;
+/* Adapted from openssl:apps/req.c
+ */
+int
+parse_dn_section(X509_NAME *subj, STACK_OF(CONF_VALUE) *dn_sk) {
   int i;
-  X509_NAME *subject = NULL;
-  if ((subject == NULL) &&
-      (cm_template_subject != NULL) &&
-      (strlen(cm_template_subject) != 0)) {
-    // This isn't really correct, but it will
-    //  probably do for now.
-    p = cm_template_subject;
-    q = p + strcspn(p, ",");
-    subject = X509_NAME_new();
-    if (subject != NULL) {
-      while (*p != '\0') {
-        if ((s = memchr(p, '=', q - p)) != NULL) {
-          *s = '\0';
-          for (i = 0; p[i] != '\0'; i++) {
-            p[i] = toupper(p[i]);
-          }
-          X509_NAME_add_entry_by_txt(subject,
-                    p, astring_type(p, s + 1, q - s - 1),
-                    (unsigned char *) (s + 1), q - s - 1,
-                    -1, 0);
-          *s = '=';
-        } else {
-          X509_NAME_add_entry_by_txt(subject,
-                    "CN", astring_type("CN", p, q - p),
-                    (unsigned char *) p, q - p,
-                    -1, 0);
-        }
-        p = q + strspn(q, ",");
-        q = p + strcspn(p, ",");
+  char *p, *q;
+  char *type;
+  CONF_VALUE *v;
+
+	for (i = 0; i < sk_CONF_VALUE_num(dn_sk); i++) {
+    int mval;
+    v = sk_CONF_VALUE_value(dn_sk, i);
+    p = q = NULL;
+    type = v->name;
+    /*
+     * Skip past any leading X. X: X, etc to allow for multiple instances
+     */
+    for (p = v->name; *p; p++)
+      if ((*p == ':') || (*p == ',') || (*p == '.')) {
+        p++;
+        if (*p)
+          type = p;
+        break;
       }
-    }
+    if (*p == '+')
+    {
+      p++;
+      mval = -1;
+    } else
+      mval = 0;
+    if (!X509_NAME_add_entry_by_txt(subj, type, MBSTRING_UTF8,
+                    (unsigned char *)v->value, -1, -1,
+                    mval))
+      return 0;
   }
 
-  return subject;
+  if (!X509_NAME_entry_count(subj)) {
+    fprintf(stderr, "error, subject in config file is empty\n");
+    return 0;
+  }
+
+  return 1;
 }
 
 int
@@ -73,10 +76,11 @@ conf_to_req_info(BIO *nconf_bio, EVP_PKEY *pubkey, unsigned char **out)
   int fd;
   CONF *reqdata;
   char *extn_section;
-  char *dn_str = NULL;
+  char *dn_sect = NULL;
   X509V3_CTX ext_ctx;
   X509_NAME *subject = NULL;
   X509_REQ *req = NULL;
+  STACK_OF(CONF_VALUE) *dn_sk;
   unsigned char *buf;
   long errorline = -1;
   int len = -1;
@@ -95,28 +99,31 @@ conf_to_req_info(BIO *nconf_bio, EVP_PKEY *pubkey, unsigned char **out)
     goto finish;
   }
 
-  dn_str = NCONF_get_string(reqdata, "req", "cm_template_subject");
-  if (dn_str == NULL) {
-    // TODO: Could it just be missing from config?
+  dn_sect = NCONF_get_string(reqdata, "req", "distinguished_name");
+  if (dn_sect == NULL) {
     ERR_print_errors_fp(stderr);
     goto finish;
   }
-  dn_str = strdup(dn_str);
-  if (dn_str == NULL) {
-    perror("main:strdup");
+  dn_sk = NCONF_get_section(reqdata, dn_sect);
+  if (dn_sk == NULL) {
+    fprintf(stderr, "Config file is missing \"distinguished_name\"\n");
+    ERR_print_errors_fp(stderr);
     goto finish;
   }
-  subject = cm_parse_subject(dn_str);
 
   req = X509_REQ_new();
   if (req == NULL) {
     ERR_print_errors_fp(stderr);
     goto finish;
   }
-  if (!X509_REQ_set_subject_name(req, subject)) {
+
+  subject = X509_REQ_get_subject_name(req);
+
+  if (!parse_dn_section(subject, dn_sk)) {
     ERR_print_errors_fp(stderr);
     goto finish;
   }
+
   if (!X509_REQ_set_pubkey(req, pubkey)) {
     ERR_print_errors_fp(stderr);
     goto finish;
@@ -159,11 +166,8 @@ finish:
   if (req != NULL) {
     X509_REQ_free(req);
   }
-  if (subject != NULL) {
-    X509_NAME_free(subject);
-  }
-  if (dn_str != NULL) {
-    free(dn_str);
+  if (dn_sect != NULL) {
+    free(dn_sect);
   }
   if (len == -1) {
     if (*out != NULL) {
