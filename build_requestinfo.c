@@ -146,7 +146,7 @@ conf_to_req_info(BIO *nconf_bio, EVP_PKEY *pubkey, unsigned char **out)
     ERR_print_errors_fp(stderr);
     goto finish;
   }
-  buf = malloc(len);
+  buf = OPENSSL_malloc(len);
   if (buf == NULL) {
     perror("conf_to_req_info:malloc");
     goto finish;
@@ -167,11 +167,11 @@ finish:
     X509_REQ_free(req);
   }
   if (dn_sect != NULL) {
-    free(dn_sect);
+    OPENSSL_free(dn_sect);
   }
   if (len == -1) {
     if (*out != NULL) {
-      free(*out);
+      OPENSSL_free(*out);
       *out = NULL;
     }
   }
