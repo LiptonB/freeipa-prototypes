@@ -166,9 +166,6 @@ finish:
   if (req != NULL) {
     X509_REQ_free(req);
   }
-  if (dn_sect != NULL) {
-    OPENSSL_free(dn_sect);
-  }
   if (len == -1) {
     if (*out != NULL) {
       OPENSSL_free(*out);
