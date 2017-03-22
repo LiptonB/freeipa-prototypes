@@ -15,12 +15,28 @@ typedef ... BIO;
 typedef ... ipa_STACK_OF_CONF_VALUE;
 
 /* openssl/conf.h */
+typedef struct {
+    char *section;
+    char *name;
+    char *value;
+} CONF_VALUE;
+
 CONF *NCONF_new(CONF_METHOD *meth);
 void NCONF_free(CONF *conf);
 int NCONF_load_bio(CONF *conf, BIO *bp, long *eline);
 ipa_STACK_OF_CONF_VALUE *NCONF_get_section(const CONF *conf,
                                         const char *section);
 char *NCONF_get_string(const CONF *conf, const char *group, const char *name);
+
+/* openssl/safestack.h */
+// int sk_CONF_VALUE_num(ipa_STACK_OF_CONF_VALUE *);
+// CONF_VALUE *sk_CONF_VALUE_value(ipa_STACK_OF_CONF_VALUE *, int);
+
+/* openssl/stack.h */
+typedef ... _STACK;
+
+int sk_num(const _STACK *);
+void *sk_value(const _STACK *, int);
 
 /* openssl/bio.h */
 BIO *BIO_new_mem_buf(const void *buf, int len);
@@ -41,7 +57,9 @@ void EVP_PKEY_free(EVP_PKEY *pkey);
 /* openssl/x509.h */
 typedef ... ASN1_INTEGER;
 typedef ... ASN1_BIT_STRING;
+typedef ... X509;
 typedef ... X509_ALGOR;
+typedef ... X509_CRL;
 typedef ... X509_NAME;
 typedef ... X509_PUBKEY;
 typedef ... ipa_STACK_OF_X509_ATTRIBUTE;
@@ -66,6 +84,33 @@ X509_REQ *X509_REQ_new(void);
 void X509_REQ_free(X509_REQ *);
 EVP_PKEY *d2i_PUBKEY_bio(BIO *bp, EVP_PKEY **a);
 int X509_REQ_set_pubkey(X509_REQ *x, EVP_PKEY *pkey);
+int X509_NAME_add_entry_by_txt(X509_NAME *name, const char *field, int type,
+                               const unsigned char *bytes, int len, int loc,
+                               int set);
+int X509_NAME_entry_count(X509_NAME *name);
+int i2d_X509_REQ_INFO(X509_REQ_INFO *a, unsigned char **out); \
+
+/* openssl/x509v3.h */
+typedef ... X509V3_CONF_METHOD;
+
+struct v3_ext_ctx {
+# define CTX_TEST 0x1
+    int flags;
+    X509 *issuer_cert;
+    X509 *subject_cert;
+    X509_REQ *subject_req;
+    X509_CRL *crl;
+    X509V3_CONF_METHOD *db_meth;
+    void *db;
+/* Maybe more here */
+};
+typedef struct v3_ext_ctx X509V3_CTX;
+
+void X509V3_set_ctx(X509V3_CTX *ctx, X509 *issuer, X509 *subject,
+                    X509_REQ *req, X509_CRL *crl, int flags);
+void X509V3_set_nconf(X509V3_CTX *ctx, CONF *conf);
+int X509V3_EXT_REQ_add_nconf(CONF *conf, X509V3_CTX *ctx, char *section,
+                             X509_REQ *req);
 ''')
 
 _libcrypto = _ffi.dlopen(ctypes.util.find_library('crypto'))
@@ -79,6 +124,14 @@ NCONF_load_bio = _libcrypto.NCONF_load_bio
 NCONF_get_section = _libcrypto.NCONF_get_section
 NCONF_get_string = _libcrypto.NCONF_get_string
 
+# openssl/stack.h
+sk_num = _libcrypto.sk_num
+sk_value = _libcrypto.sk_value
+def sk_CONF_VALUE_num(sk):
+    return sk_num(_ffi.cast("_STACK *", sk))
+def sk_CONF_VALUE_value(sk, i):
+    return _ffi.cast("CONF_VALUE *", sk_value(_ffi.cast("_STACK *", sk), i))
+
 # openssl/bio.h
 BIO_new_mem_buf = _libcrypto.BIO_new_mem_buf
 BIO_free = _libcrypto.BIO_free
@@ -90,9 +143,20 @@ X509_REQ_set_pubkey = _libcrypto.X509_REQ_set_pubkey
 def X509_REQ_get_subject_name(req):
     return req.req_info.subject
 d2i_PUBKEY_bio = _libcrypto.d2i_PUBKEY_bio
+i2d_X509_REQ_INFO = _libcrypto.i2d_X509_REQ_INFO
+X509_NAME_add_entry_by_txt = _libcrypto.X509_NAME_add_entry_by_txt
+X509_NAME_entry_count = _libcrypto.X509_NAME_entry_count
 
 # openssl/evp.h
 EVP_PKEY_free = _libcrypto.EVP_PKEY_free
+
+# openssl/asn1.h
+MBSTRING_UTF8 = 0x1000
+
+# openssl/x509v3.h
+X509V3_set_ctx = _libcrypto.X509V3_set_ctx
+X509V3_set_nconf = _libcrypto.X509V3_set_nconf
+X509V3_EXT_REQ_add_nconf = _libcrypto.X509V3_EXT_REQ_add_nconf
 
 class OpenSSLException(Exception):
     pass
@@ -109,9 +173,29 @@ def openssl_raise():
     raise OpenSSLException('\n'.join(msgs))
 
 
-def parse_dn_section(subject, dn_sk):
-    pass
+def parse_dn_section(subj, dn_sk):
+    for i in range(sk_CONF_VALUE_num(dn_sk)):
+        v = sk_CONF_VALUE_value(dn_sk, i);
+        rdn_type = _ffi.string(v.name)
 
+        # Skip past any leading X. X: X, etc to allow for multiple instances
+        for idx, c in enumerate(rdn_type):
+            if c in ':,.':
+                if idx+1 < len(rdn_type):
+                    rdn_type = rdn_type[idx+1:]
+                break
+        if rdn_type.startswith('+'):
+            # TODO(blipton): test whether this is consistent with openssl req
+            rdn_type = rdn_type[1:]
+            mval = -1
+        else:
+            mval = 0
+        if not X509_NAME_add_entry_by_txt(
+                subj, rdn_type, MBSTRING_UTF8, v.value, -1, -1, mval):
+            openssl_raise()
+
+    if not X509_NAME_entry_count(subj):
+        raise OpenSSLException('error, subject in config file is empty')
 
 
 def build_requestinfo(config, public_key_info):
@@ -160,6 +244,27 @@ def build_requestinfo(config, public_key_info):
         if not X509_REQ_set_pubkey(req, pubkey):
             openssl_raise()
 
+        ext_ctx = _ffi.new("X509V3_CTX[1]")
+        X509V3_set_ctx(ext_ctx, NULL, NULL, req, NULL, 0);
+        X509V3_set_nconf(ext_ctx, reqdata);
+
+        extn_section = NCONF_get_string(reqdata, "req", "req_extensions");
+        if extn_section != NULL:
+            if not X509V3_EXT_REQ_add_nconf(reqdata, ext_ctx, extn_section, req):
+                openssl_raise()
+
+        der_len = i2d_X509_REQ_INFO(req.req_info, NULL);
+        if der_len < 0:
+            openssl_raise()
+
+        der_buf = _ffi.new("unsigned char[%d]" % der_len)
+        der_out = _ffi.new("unsigned char **", der_buf)
+        der_len = i2d_X509_REQ_INFO(req.req_info, der_out);
+        if der_len < 0:
+            openssl_raise()
+
+        return _ffi.buffer(der_buf, der_len)
+
     finally:
         if reqdata != NULL:
             NCONF_free(reqdata)
@@ -172,40 +277,15 @@ def build_requestinfo(config, public_key_info):
         if pubkey != NULL:
             EVP_PKEY_free(pubkey)
 
-        #if (len == -1) {
-        #    if (*out != NULL) {
-        #        OPENSSL_free(*out);
-        #        *out = NULL;
-        #    }
-        #}
 
 if __name__ == '__main__':
-    config = '''
-[ req ]
-prompt = no
-encrypt_key = no
+    if len(sys.argv) != 3:
+        print >>sys.stderr, "Usage: %s <openssl config file> <SubjectPublicKeyInfo file>"
+        sys.exit(1)
 
-distinguished_name = dn
-req_extensions = exts
+    with open(sys.argv[1], 'r') as conf_file:
+        config = conf_file.read()
+    with open(sys.argv[2], 'r') as pubkey_file:
+        public_key_info = base64.b64decode(pubkey_file.read())
 
-[ dn ]
-commonName = "user"
-
-[ exts ]
-subjectAltName=email:user@example.test
-keyUsage=digitalSignature,nonRepudiation
-subjectAltName=IP:192.168.1.1,URI:http://test.example.com,email:user@example.test
-extendedKeyUsage=clientAuth,emailProtection
-'''
-
-    public_key_info = base64.b64decode('''
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA069mZkJrL23wxAfWY5n4
-hW1k5GLLGVXA2k1io7JWNPbe2Gcrnxezb+7ENesyf69VFCNJ9c7S9CF7lXN7LLOz
-dlWWTbqf550WLhBUxHr+Euj5kfsdQkQx+W1uwV3zc/hqft2iJ0L8sqP0QJ/MIX4Q
-Q6yuTD70lfPGKuQNPYAzay3G7CHrEInqNekVFEkHtJtLEPdkeUv4kfIAiD6BSM9+
-OQxtApp6pkR7chpV1EAZc+qUTGlKC61HRFQJ955fYAlHomGbCCzz+qzY67zYlHCt
-0iPga+nGMMx+lrkrlNEQDOV7sHgNDiJvi5UmV9mXRJ6vz8yiJ/SDkNdqzOj70wjM
-gQIDAQAB
-''')
-
-    build_requestinfo(config, public_key_info)
+    print base64.b64encode(build_requestinfo(config, public_key_info))
